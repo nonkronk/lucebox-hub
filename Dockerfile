@@ -86,11 +86,20 @@ RUN pip3 install --no-cache-dir --no-build-isolation -e .
 
 # ── Build: DFlash 27B ────────────────────────────────────────
 WORKDIR /workspace/lucebox-hub/dflash
-RUN cmake -B build -S . \
+# libcuda.so.1 is a host driver library — not present inside the build container.
+# The CUDA devel image ships a linker stub at /usr/local/cuda/lib64/stubs/libcuda.so
+# Create the .so.1 symlink the linker expects, point CMake at the stubs dir,
+# then at runtime the real libcuda.so.1 from the host driver is used instead.
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so \
+           /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && cmake -B build -S . \
         -DCMAKE_CUDA_ARCHITECTURES=86 \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_FLAGS="-arch=sm_86 --use_fast_math" \
-    && cmake --build build --target test_dflash -j"$(nproc)"
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+    && cmake --build build --target test_dflash -j"$(nproc)" \
+    && rm /usr/local/cuda/lib64/stubs/libcuda.so.1
 
 # ── Model directory (populated at runtime via volume) ────────
 RUN mkdir -p /workspace/lucebox-hub/dflash/models/draft
