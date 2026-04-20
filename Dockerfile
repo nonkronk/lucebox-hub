@@ -86,20 +86,27 @@ RUN pip3 install --no-cache-dir --no-build-isolation -e .
 
 # ── Build: DFlash 27B ────────────────────────────────────────
 WORKDIR /workspace/lucebox-hub/dflash
-# libcuda.so.1 is a host driver library — not present inside the build container.
-# The CUDA devel image ships a linker stub. We symlink it into /usr/local/lib
-# (a standard ldconfig path) so the stub is found globally by ALL subproject
-# linker invocations, including llama.cpp's internal libggml-cuda.so build.
-# The stub is removed after build; at runtime the host driver's real
-# libcuda.so.1 is injected via nvidia-container-toolkit.
-RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/lib/libcuda.so.1 \
+# libcuda.so.1 is a host-driver library absent during image build.
+# Three-pronged fix so every linker path (gcc LIBRARY_PATH, ld.so cache,
+# and transitive .so resolution) all find the CUDA devel stub:
+#   1. Symlink libcuda.so → libcuda.so.1 inside the stubs dir itself
+#   2. Register stubs dir with ldconfig (dynamic loader cache)
+#   3. Export LIBRARY_PATH so gcc/g++ compile-time linker searches it too
+# The stub symlink is removed after the build; at runtime nvidia-container-
+# toolkit bind-mounts the real libcuda.so.1 from the host driver.
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so \
+           /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && echo "/usr/local/cuda/lib64/stubs" > /etc/ld.so.conf.d/cuda-stubs.conf \
     && ldconfig \
-    && cmake -B build -S . \
+    && LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH} \
+       cmake -B build -S . \
         -DCMAKE_CUDA_ARCHITECTURES=86 \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_FLAGS="-arch=sm_86 --use_fast_math" \
-    && cmake --build build --target test_dflash -j"$(nproc)" \
-    && rm /usr/local/lib/libcuda.so.1 \
+    && LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH} \
+       cmake --build build --target test_dflash -j"$(nproc)" \
+    && rm /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && rm /etc/ld.so.conf.d/cuda-stubs.conf \
     && ldconfig
 
 # ── Model directory (populated at runtime via volume) ────────
