@@ -68,3 +68,6 @@ checkpoints/
 .env.local
 *.pem
 *.key
+
+# HF cache (if not set to a custom location)
+hf_cache/
