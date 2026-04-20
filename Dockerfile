@@ -62,6 +62,8 @@ RUN pip3 install --no-cache-dir \
 # Common Python deps used by both subprojects
 RUN pip3 install --no-cache-dir \
         transformers \
+        fastapi \
+        uvicorn \
         huggingface_hub \
         "huggingface_hub[cli]" \
         accelerate \
