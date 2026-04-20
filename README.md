@@ -1,190 +1,141 @@
-<p align="center">
-  <img src="assets/banner.png" alt="Lucebox" width="85%">
-</p>
+# lucebox-hub · Docker Setup for RTX 3090
 
-<p align="center">
-  <a href="https://lucebox.com"><img src="https://img.shields.io/badge/lucebox.com-f5c842?style=for-the-badge&logo=safari&logoColor=f5c842&labelColor=090909" alt="lucebox.com"></a>
-  <a href="https://discord.gg/yHfswqZmJQ"><img src="https://img.shields.io/badge/Discord-f5c842?style=for-the-badge&logo=discord&logoColor=f5c842&labelColor=090909" alt="Discord"></a>
-  <a href="https://lucebox.com/blog"><img src="https://img.shields.io/badge/Blog-f5c842?style=for-the-badge&logo=rss&logoColor=f5c842&labelColor=090909" alt="Blog"></a>
-</p>
+End-to-end Docker build for [lucebox-hub](https://github.com/Luce-Org/lucebox-hub), targeting the **RTX 3090 (Ampere sm_86)**. Covers both subprojects:
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-e8e8ed?style=for-the-badge&labelColor=090909" alt="MIT"></a>
-  <a href="https://developer.nvidia.com/cuda-toolkit"><img src="https://img.shields.io/badge/CUDA-12%2B-76b900?style=for-the-badge&logo=nvidia&logoColor=76b900&labelColor=090909" alt="CUDA 12+"></a>
-  <a href="https://isocpp.org"><img src="https://img.shields.io/badge/C%2B%2B-17-e8e8ed?style=for-the-badge&logo=cplusplus&logoColor=e8e8ed&labelColor=090909" alt="C++17"></a>
-</p>
-
-<p align="center">
-  <strong>Open LLM inference, rewritten by hand for one specific chip at a time.</strong><br/>
-  Kernels, speculative decoding, and quantization, tailored per target.<br/>
-  We don't wait for better silicon. We rewrite the software.
-</p>
+- **Megakernel** — fused single-dispatch CUDA kernel for Qwen 3.5-0.8B
+- **DFlash 27B** — DFlash speculative decoding, Qwen 3.5-27B at ~130 tok/s on 24 GB VRAM
 
 ---
 
-## Inside the box
+## Prerequisites
 
-Two projects today, more coming. Each one is a self-contained release with its own benchmarks and paper-style writeup.
+| Requirement | Version |
+|---|---|
+| NVIDIA Driver | 525+ (for CUDA 12) |
+| Docker Engine | 24+ |
+| NVIDIA Container Toolkit | latest |
+| Disk space | ~25 GB for models + image |
 
-<p align="center">
-  <a href="megakernel/"><img src="assets/svg/card-megakernel-dark.svg" alt="Megakernel" width="46%"></a>
-  &nbsp;&nbsp;
-  <a href="dflash/"><img src="assets/svg/card-dflash-dark.svg" alt="DFlash 27B" width="46%"></a>
-</p>
+> **Your setup detected:** Driver 580.142 · CUDA 13.0 · RTX 3090 24 GB ✓  
+> The image uses `nvidia/cuda:12.6.3-devel` as base — CUDA 13.0 Docker images aren't published yet, but your driver is fully backward-compatible with any CUDA 12.x binary.
+
+Install the NVIDIA Container Toolkit if you haven't:
+```bash
+# Ubuntu/Debian
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify GPU is visible to Docker:
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
 
 ---
 
-## 01 · Megakernel Qwen3.5 0.8B on RTX 3090
+## File layout
 
-**The first megakernel for hybrid DeltaNet/Attention LLMs.** All 24 layers of Qwen 3.5-0.8B in a single CUDA dispatch, 1.87 tok/J on a 2020 GPU, matching Apple's latest silicon at 2× the throughput.
+```
+lucebox-hub-docker/
+├── Dockerfile          ← CUDA 12.4 devel image, builds megakernel + dflash
+├── docker-compose.yml  ← GPU passthrough, volumes, env
+├── entrypoint.sh       ← Subcommand router (download / megakernel / dflash / shell)
+├── models/             ← Created automatically, holds GGUF + draft weights
+└── hf_cache/           ← HuggingFace cache (avoids re-downloads)
+```
+
+---
+
+## Quick Start
+
+### 1. Build the image
+
+The build compiles the DFlash C++/CUDA engine (target `sm_86`) and installs the Python megakernel package. Takes ~10–15 min the first time.
 
 ```bash
-# 1. clone + enter
-git clone https://github.com/Luce-Org/lucebox-hub && cd lucebox-hub/megakernel
-
-# 2. install (Python 3.10+, CUDA 12+, PyTorch 2.0+). Weights stream from HF on first run.
-pip install -e .
-
-# 3. run the benchmark (prefill pp520 + decode tg128 vs llama.cpp BF16 + PyTorch HF)
-python final_bench.py
+docker compose build
 ```
+
+Or with plain Docker:
+```bash
+docker build -t lucebox-hub:rtx3090 .
+```
+
+### 2. Download models (~18 GB total)
+
+```bash
+docker compose run lucebox download
+```
+
+This downloads into `./models/` on your host so you only do it once. If you have a HuggingFace token (required for some gated repos), set it first:
+
+```bash
+export HUGGING_FACE_HUB_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+# or edit the environment section in docker-compose.yml
+```
+
+### 3. Run Megakernel benchmark
+
+Benchmarks the fused CUDA dispatch for Qwen 3.5-0.8B. Weights are streamed from HuggingFace automatically (no separate download needed).
+
+```bash
+docker compose run lucebox megakernel
+```
+
+Expected output (RTX 3090 @ 220W):
 
 | Method | Prefill pp520 | Decode tg128 | tok/J |
-|--------|:-------------:|:------------:|:-----:|
-| **Megakernel** `@220W` | **37,800** | **413** | **1.87** |
-| llama.cpp BF16 `@350W` | 11,247 | 267 | 0.76 |
-| PyTorch HF | 7,578 | 108 | n/a |
+|---|---|---|---|
+| **Megakernel** | 37,800 | 413 | **1.87** |
+| llama.cpp BF16 | 11,247 | 267 | 0.76 |
 
-**What makes it work:** 82 blocks, 512 threads, one persistent kernel. No CPU round-trips between layers. Weights streamed straight from HuggingFace. Cooperative grid sync instead of ~100 kernel launches per token. Power ceiling hit before compute ceiling, so DVFS converts tight execution straight into saved watts.
-
-[Full writeup →](megakernel/README.md) · [Benchmarks →](megakernel/RESULTS.md) · [Blog post →](https://lucebox.com/blog/megakernel)
-
----
-
-## 02 · DFlash DDtree Qwen3.5 27B GGUF on RTX 3090
-
-**First GGUF port of DFlash speculative decoding.** Qwen3.5-27B on a single RTX 3090, Q4_K_M target + BF16 draft, DDTree budget=22.
-
-- **Up to 207 tok/s** in the demo (207.6 tok/s DFlash vs 38.0 tok/s AR, 5.46×)
-- **129.5 tok/s mean** on the HumanEval 10-prompt bench
-- **3.43× faster than autoregressive** (+15% over chain speculative decoding)
-- **2.8× faster than SGLang AWQ** on the same hardware
-- **128K context in 24 GB** (134.78 tok/s at ctx=131072)
+### 4. Run DFlash 27B inference
 
 ```bash
-# 1. clone with submodules (pulls the pinned Luce-Org/llama.cpp@luce-dflash fork)
-git clone --recurse-submodules https://github.com/Luce-Org/lucebox-hub && cd lucebox-hub/dflash
-
-# 2. build the C++/CUDA decoder (~3 min on sm_86, CUDA 12+, CMake 3.18+)
-cmake -B build -S . -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target test_dflash -j
-
-# 3. fetch weights: ~16 GB Q4_K_M target + 3.46 GB bf16 draft
-huggingface-cli download unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_K_M.gguf --local-dir models/
-huggingface-cli download z-lab/Qwen3.5-27B-DFlash model.safetensors --local-dir models/draft/
-
-# 4a. one-shot streaming generate
-python3 scripts/run.py --prompt "def fibonacci(n):"
-
-# 4b. or reproduce the paper-style bench (HumanEval + GSM8K + Math500, ~15 min)
-python3 scripts/bench_llm.py
+docker compose run lucebox dflash --prompt "def fibonacci(n):"
 ```
 
-| Benchmark | AR (tok/s) | DFlash+DDTree (tok/s) | Speedup |
-|-----------|:----------:|:---------------------:|:-------:|
-| **HumanEval** | 37.8 | **129.5** | **3.43×** |
-| Math500 | 37.7 | 110.5 | 2.93× |
-| GSM8K | 37.7 | 96.2 | 2.55× |
-
-**The constraint that shaped the project.** AWQ INT4 of Qwen3.5-27B plus the BF16 draft doesn't leave room for the DDTree verify state on a 24 GB card. Q4_K_M GGUF (~16 GB target) is the largest format that fits target + 3.46 GB draft + budget=22 tree state + KV cache in 24 GB on the RTX 3090. Picking it forced a new port on top of ggml, since no public DFlash runtime supports a GGUF target.
-
-**What we built vs what we didn't.** The algorithms are not ours:
-- [**DFlash**](https://arxiv.org/abs/2602.06036) (z-lab, 2026): block-diffusion draft conditioned on target hidden states.
-- [**DDTree**](https://arxiv.org/abs/2604.12989) (Ringel et al., 2026): tree-structured verify that beats chain verify at the same compute budget.
-
-What we ported and tuned:
-- C++/CUDA decode engine on top of ggml (no libllama, no Python runtime, Q4_K_M target path).
-- Three custom CUDA kernels for tree-aware SSM state rollback: `ggml_ssm_conv_tree`, `ggml_gated_delta_net_tree`, `ggml_gated_delta_net_tree_persist`.
-- DDTree budget swept for RTX 3090 + Q4_K_M target: **budget=22** is the sweet spot.
-- Q4_0 KV cache + sliding `target_feat` ring to fit 128K context in 24 GB with ~3% AL hit.
-
-[Full writeup →](dflash/README.md) · [Benchmarks →](dflash/RESULTS.md) · [Blog post →](https://lucebox.com/blog/dflash)
+~130 tok/s on HumanEval prompts. 128K context fits in 24 GB (Q4_K_M target + BF16 draft + budget=22 DDTree + KV cache).
 
 ---
 
-## Why this exists
+**Optional: Set Power Limit**
 
-Local AI should be a default, not a privilege: private data, no per-token bill, no vendor lock-in. The hardware to run capable models already sits on desks. The software to run those chips well doesn't.
+Your `nvidia-smi` shows a 225W cap. The project recommends 220W for best efficiency (power ceiling before compute ceiling = more tok/J). Drop it 5W with:
 
-General-purpose frameworks dominated the last decade because hand-tuning kernels per chip was too expensive to justify. One stack, decent on everything, great on nothing. Most of the silicon's capability stays on the floor.
-
-AI-assisted development flips that calculus. Rewrites that took a quarter now fit in a release cycle. Lucebox is where we publish them, one chip and one model family at a time. MIT source, full writeup, reproducible benchmarks.
-
----
-
-## Requirements
-
-NVIDIA GPU (Ampere+, sm_86+), CUDA 12+, PyTorch 2.0+. Tested on RTX 3090 (2020).
-dflash needs CMake 3.18+ and `--recurse-submodules` for the pinned `Luce-Org/llama.cpp@luce-dflash` fork (three tree-mode ggml ops).
-
-**Optional, find your GPU's sweet spot:** `sudo nvidia-smi -pl 220` (megakernel hits best tok/J at 220 W).
-
----
-
-## Repository layout
-
-```
-lucebox-hub/
-├── megakernel/    · fused forward pass for Qwen 3.5-0.8B
-├── dflash/        · DFlash speculative decoding port for Qwen 3.5-27B on RTX 3090
-└── assets/        · banners, cards, diagrams
+```bash
+# On the HOST before starting container
+sudo nvidia-smi -pl 220
 ```
 
 ---
 
-## Roadmap
+## Interactive shell
 
-```
-  Q1 2026    ▮▮▮▮▮▮▮▮▮▮    RTX 3090 kernels & optimizations
-  Q2 2026    ▮▮▮▮▮▯▯▯▯▯    Ryzen AI MAX+ 395 optimizations
-  Q2 2026    ▮▮▯▯▯▯▯▯▯▯    Heterogeneous CPU + GPU latency optimizations
-```
-
----
-
-## Citation
-
-```bibtex
-@software{lucebox_2026,
-  title  = {Lucebox: Open LLM Inference, Rewritten by Hand for One Specific Chip at a Time},
-  author = {Lucebox},
-  url    = {https://github.com/Luce-Org/lucebox-hub},
-  year   = {2026}
-}
+```bash
+docker compose run lucebox shell
+# Inside container:
+cd /workspace/lucebox-hub/dflash
+python3 scripts/run.py --prompt "Explain transformers" --max_tokens 200
 ```
 
-Per-project citations live in each subproject's README.
-
 ---
 
-## Inspired by
+## Troubleshooting
 
-- [Hazy Research](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles): megakernel idea and the intelligence-per-watt methodology.
-- [z-lab/DFlash](https://arxiv.org/abs/2602.06036) (Wang et al., 2026): block-diffusion speculative decoding algorithm. We use their published Qwen3.5-27B-DFlash draft weights as-is.
-- [DDTree](https://arxiv.org/abs/2604.12989) (Ringel & Romano, 2026): tree-structured verify that DFlash 27B uses for its 3.5× speedup over chain spec decoding. [liranringel/ddtree](https://github.com/liranringel/ddtree).
-- [AlpinDale/qwen_megakernel](https://github.com/AlpinDale/qwen_megakernel), [Infatoshi/MegaQwen](https://github.com/Infatoshi/MegaQwen): prior art on fused Qwen kernels.
+**`CUDA error: no kernel image is available`**
+→ The image is built for `sm_86`. Confirm you're on an RTX 3090 (or other Ampere GPU). RTX 30xx series = Ampere = sm_86.
 
----
+**`Out of memory` during DFlash**
+→ Make sure no other processes are using VRAM. Run `nvidia-smi` on host to check.
 
-## Community
+**`huggingface-cli: download failed`**
+→ Some models may require a HF account. Set `HUGGING_FACE_HUB_TOKEN` in the environment.
 
-- **Discord**: [discord.gg/yHfswqZmJQ](https://discord.gg/yHfswqZmJQ)
-- **Website**: [lucebox.com](https://lucebox.com)
-- **Issues**: [github.com/Luce-Org/lucebox-hub/issues](https://github.com/Luce-Org/lucebox-hub/issues)
-- **Blog**: [lucebox.com/blog](https://lucebox.com/blog)
-
----
-
-<p align="center">
-  <sub><a href="LICENSE">MIT</a> · <a href="https://lucebox.com">Lucebox.com</a></sub>
-</p>
+**Build fails on megakernel `pip install -e .`**
+→ Likely a CUDA version mismatch in extension compilation. The Dockerfile uses PyTorch cu124 wheels against CUDA 12.6 devel — both are compatible with your 580.142 driver.

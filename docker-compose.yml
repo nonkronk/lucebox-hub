@@ -1,0 +1,54 @@
+# ============================================================
+# lucebox-hub · docker compose
+# RTX 3090 (Ampere sm_86) — CUDA 12.4
+# ============================================================
+
+services:
+  lucebox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: lucebox-hub:rtx3090
+
+    container_name: lucebox-hub
+
+    # ── GPU passthrough ──────────────────────────────────────
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all          # or: device_ids: ["0"]
+              capabilities: [gpu]
+
+    # ── Power limit (optional but recommended for RTX 3090) ──
+    # The project recommends 220W for efficiency.
+    # Uncomment to apply on container start:
+    # command: sh -c "nvidia-smi -pl 220 && /usr/local/bin/entrypoint.sh $$@"
+
+    # ── Volumes ──────────────────────────────────────────────
+    volumes:
+      # Model files — persisted on host so you only download once
+      - ./models:/workspace/lucebox-hub/dflash/models
+
+      # HuggingFace cache — avoids re-downloading tokenizers etc.
+      - ./hf_cache:/workspace/hf_cache
+
+    # ── Environment ──────────────────────────────────────────
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
+      # Set your HF token here if needed for gated models:
+      # - HUGGING_FACE_HUB_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+
+    # ── Runtime ──────────────────────────────────────────────
+    runtime: nvidia
+
+    # ── TTY for interactive use ───────────────────────────────
+    stdin_open: true
+    tty: true
+
+    # ── Default: show help ────────────────────────────────────
+    command: help
