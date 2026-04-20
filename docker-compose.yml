@@ -12,6 +12,7 @@ services:
     image: lucebox-hub:rtx3090
 
     container_name: lucebox-hub
+    restart: unless-stopped
 
     # ── GPU passthrough ──────────────────────────────────────
     deploy:
@@ -30,18 +31,26 @@ services:
     # ── Volumes ──────────────────────────────────────────────
     volumes:
       # Model files — persisted on host so you only download once
-      - ./models:/workspace/lucebox-hub/dflash/models
+      - ${LUCEBOX_MODELS_DIR:-./models}:/workspace/lucebox-hub/dflash/models
 
       # HuggingFace cache — avoids re-downloading tokenizers etc.
-      - ./hf_cache:/workspace/hf_cache
+      - ${LUCEBOX_HF_CACHE_DIR:-./hf_cache}:/workspace/hf_cache
 
     # ── Environment ──────────────────────────────────────────
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - CUDA_VISIBLE_DEVICES=0
-      # Set your HF token here if needed for gated models:
-      # - HUGGING_FACE_HUB_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+      # Optional HF token for gated repos. Can be set in .env on Unraid.
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      # Persistent API server settings
+      - LUCEBOX_SERVER_HOST=${LUCEBOX_SERVER_HOST:-0.0.0.0}
+      - LUCEBOX_SERVER_PORT=${LUCEBOX_SERVER_PORT:-8000}
+      - DFLASH_SERVER_BUDGET=${DFLASH_SERVER_BUDGET:-22}
+
+    # ── API port mapping ─────────────────────────────────────
+    ports:
+      - "${LUCEBOX_BIND_IP:-0.0.0.0}:${LUCEBOX_HOST_PORT:-8000}:${LUCEBOX_SERVER_PORT:-8000}"
 
     # ── Runtime ──────────────────────────────────────────────
     runtime: nvidia
@@ -50,5 +59,5 @@ services:
     stdin_open: true
     tty: true
 
-    # ── Default: show help ────────────────────────────────────
-    command: help
+    # ── Default: persistent OpenAI-compatible API server ──────
+    command: serve

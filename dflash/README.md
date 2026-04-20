@@ -81,8 +81,8 @@ cmake -B build -S . -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target test_dflash -j
 
 # Fetch models: ~16 GB target + 3.46 GB draft
-huggingface-cli download unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_K_M.gguf --local-dir models/
-huggingface-cli download z-lab/Qwen3.5-27B-DFlash model.safetensors --local-dir models/draft/
+hf download unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_K_M.gguf --local-dir models/
+hf download z-lab/Qwen3.5-27B-DFlash model.safetensors --local-dir models/draft/
 
 # Streaming one-shot generate
 python3 scripts/run.py --prompt "def fibonacci(n):"

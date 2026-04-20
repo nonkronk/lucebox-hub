@@ -5,6 +5,8 @@ End-to-end Docker build for [lucebox-hub](https://github.com/Luce-Org/lucebox-hu
 - **Megakernel** — fused single-dispatch CUDA kernel for Qwen 3.5-0.8B
 - **DFlash 27B** — DFlash speculative decoding, Qwen 3.5-27B at ~130 tok/s on 24 GB VRAM
 
+For an Unraid-first setup with stack-friendly paths, see [UNRAID.md](UNRAID.md).
+
 ---
 
 ## Prerequisites
@@ -44,6 +46,7 @@ docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
 lucebox-hub-docker/
 ├── Dockerfile          ← CUDA 12.4 devel image, builds megakernel + dflash
 ├── docker-compose.yml  ← GPU passthrough, volumes, env
+├── .env.example        ← Editable host-path + token template
 ├── entrypoint.sh       ← Subcommand router (download / megakernel / dflash / shell)
 ├── models/             ← Created automatically, holds GGUF + draft weights
 └── hf_cache/           ← HuggingFace cache (avoids re-downloads)
@@ -52,6 +55,30 @@ lucebox-hub-docker/
 ---
 
 ## Quick Start
+
+### 0. Configure host paths (recommended)
+
+```bash
+cp .env.example .env
+```
+
+On Unraid, edit `.env` and set absolute paths:
+
+```bash
+LUCEBOX_MODELS_DIR=/mnt/user/appdata/lucebox-hub/models
+LUCEBOX_HF_CACHE_DIR=/mnt/user/appdata/lucebox-hub/hf_cache
+HUGGING_FACE_HUB_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
+LUCEBOX_SERVER_HOST=0.0.0.0
+LUCEBOX_SERVER_PORT=8000
+LUCEBOX_BIND_IP=0.0.0.0
+LUCEBOX_HOST_PORT=8000
+DFLASH_SERVER_BUDGET=22
+```
+
+Port behavior:
+- `LUCEBOX_SERVER_PORT` is the port the API listens on inside the container.
+- `LUCEBOX_HOST_PORT` is the published host port on Unraid.
+- `LUCEBOX_BIND_IP` controls which host interface is exposed (`0.0.0.0` for LAN, `127.0.0.1` for local-only).
 
 ### 1. Build the image
 
@@ -69,17 +96,30 @@ docker build -t lucebox-hub:rtx3090 .
 ### 2. Download models (~18 GB total)
 
 ```bash
-docker compose run lucebox download
+docker compose run --rm lucebox download
 ```
 
-This downloads into `./models/` on your host so you only do it once. If you have a HuggingFace token (required for some gated repos), set it first:
+This downloads into your host path from `.env` (default `./models/`) so you only do it once.
+
+### 3. Start persistent API server
 
 ```bash
-export HUGGING_FACE_HUB_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
-# or edit the environment section in docker-compose.yml
+docker compose up -d
 ```
 
-### 3. Run Megakernel benchmark
+Verify server health:
+
+```bash
+curl http://localhost:${LUCEBOX_HOST_PORT:-8000}/v1/models
+```
+
+Stop server:
+
+```bash
+docker compose down
+```
+
+### 4. Run Megakernel benchmark
 
 Benchmarks the fused CUDA dispatch for Qwen 3.5-0.8B. Weights are streamed from HuggingFace automatically (no separate download needed).
 
@@ -94,7 +134,7 @@ Expected output (RTX 3090 @ 220W):
 | **Megakernel** | 37,800 | 413 | **1.87** |
 | llama.cpp BF16 | 11,247 | 267 | 0.76 |
 
-### 4. Run DFlash 27B inference
+### 5. Run DFlash 27B inference
 
 ```bash
 docker compose run lucebox dflash --prompt "def fibonacci(n):"
@@ -134,7 +174,7 @@ python3 scripts/run.py --prompt "Explain transformers" --max_tokens 200
 **`Out of memory` during DFlash**
 → Make sure no other processes are using VRAM. Run `nvidia-smi` on host to check.
 
-**`huggingface-cli: download failed`**
+**`hf download` fails with 401/403**
 → Some models may require a HF account. Set `HUGGING_FACE_HUB_TOKEN` in the environment.
 
 **Build fails on megakernel `pip install -e .`**
